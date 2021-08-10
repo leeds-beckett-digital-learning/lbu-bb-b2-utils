@@ -1,0 +1,24 @@
+apply plugin: 'java'
+apply plugin: 'jacoco'
+apply plugin: 'maven-publish'
+
+tasks.withType(JavaCompile) {
+    options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
+}
+
+description = 'LBU-BB-B2-Utils'
+    group = 'uk.ac.keedsbeckett'
+repositories {
+    mavenCentral()
+    maven {
+      url "https://maven.blackboard.com/content/repositories/releases/"
+    }    
+}
+
+dependencies {
+    compileOnly "blackboard.platform:xsscore:3900.0.0"
+    compileOnly "log4j:log4j:1.2.17"
+    compileOnly 'com.fasterxml.jackson.core:jackson-databind:2.10.0'
+    
+    testImplementation     'junit:junit:4.13'
+}
