@@ -129,7 +129,7 @@ public class XythosUtils
   public FileSystemFile createFile( Context context, String locationpath, String name, String mime, InputStream in ) throws XythosException
   {
     if ( logger != null )
-      logger.info( "Creating file parent = " + locationpath + "  " + name );
+      logger.debug( "Creating file parent = " + locationpath + "  " + name );
     CreateFileData cfd = new CreateFileData(
             xythosvserver,
             locationpath,
@@ -209,7 +209,7 @@ public class XythosUtils
     if ( xythosvserver == null ) return false;
     if ( xythosprincipalid == null ) return false;
     
-    if ( logger != null ) logger.info( "Creating " + path );
+    if ( logger != null ) logger.debug( "Creating " + path );
     
     FileSystemEntry dir;
     if ( path.startsWith( "/" ) )
@@ -217,7 +217,7 @@ public class XythosUtils
     String[] pathparts = path.split( "/" );
     if ( logger != null )
       for ( int i=0; i<pathparts.length; i++ )
-        logger.info( "    Split " + i + " " + pathparts[i] );
+        logger.debug( "    Split " + i + " " + pathparts[i] );
     
     if ( pathparts.length < 2 )
       return false;
@@ -229,7 +229,7 @@ public class XythosUtils
       if ( dir == null )
       {
         if ( logger != null )
-          logger.info( "    Creating in parent " + parent + " directory " + pathparts[i] );
+          logger.debug( "    Creating in parent " + parent + " directory " + pathparts[i] );
         CreateDirectoryData cdd = new CreateDirectoryData( xythosvserver, parent, pathparts[i], xythosprincipalid );
         dir = FileSystem.createDirectory( cdd, context );
       }

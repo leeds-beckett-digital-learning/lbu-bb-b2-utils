@@ -16,9 +16,11 @@ repositories {
 }
 
 dependencies {
-    compileOnly "blackboard.platform:xsscore:3900.0.0"
+    compileOnly "blackboard.platform:xsscore:3900.19.0"
+    compileOnly "blackboard.platform:bb-platform:3900.19.0"    
     compileOnly "log4j:log4j:1.2.17"
     compileOnly 'com.fasterxml.jackson.core:jackson-databind:2.10.0'
+    compileOnly "org.apache.activemq:activemq-client:5.15.11"
     
     testImplementation     'junit:junit:4.13'
 }

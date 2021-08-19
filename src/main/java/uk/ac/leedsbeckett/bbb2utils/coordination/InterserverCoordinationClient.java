@@ -189,13 +189,10 @@ public abstract class InterserverCoordinationClient implements StorageServerEven
       context = ContextFactory.create( xythosutils.getXythosUser(), new Properties() );
       String id = MessageUtils.createMessageId();
       String mhjson = mhjsonconv.write( header );
-      logger.info( "-----------------------" );
-      logger.info( "Sending message with heading" );
+      logger.info( "Sending message with this heading" );
       logger.info( mhjson );
-      logger.info( "-----------------------" );
       FileSystemFile fsfile = xythosutils.createFile(context, exchangepath, id, "text/plain", content );
       String entryid = fsfile.getEntryID();
-      logger.info( "Created file " + entryid );
       // commit the file creation so that it exists when the
       // coordinator receives a notification of the property addition
       context.commitContext();
@@ -204,7 +201,6 @@ public abstract class InterserverCoordinationClient implements StorageServerEven
       FileSystemEntry fse = FileSystem.findEntryFromEntryID( entryid, false, context );
       Property p = fse.addProperty( propdefdestination, mhjson, true, context );
       context.commitContext();
-      logger.info( "Added property " + p.getValue() );
     }
     catch ( Exception ex )
     {
@@ -241,8 +237,6 @@ public abstract class InterserverCoordinationClient implements StorageServerEven
   {
     try
     {
-      logger.info( "XythosMonitor -  event = " + fse.getClass() );
-
       if ( !(fse instanceof FileSystemEntryPropertyAddedEvent) )
         return;
 
@@ -250,13 +244,11 @@ public abstract class InterserverCoordinationClient implements StorageServerEven
       String path = fspae.getFileSystemEntryName();      
       if ( !path.startsWith( exchangepath ) )
         return;
-      logger.info( "XythosMonitor -  added property to " + path );
       if ( !fspae.getPropertyNamespace().equals( XythosUtils.COORDINATION_NAMESPACE ) )
         return;
-      logger.info( "XythosMonitor -  property in coordination namespace. name = " + fspae.getPropertyName() );
       if ( !fspae.getPropertyName().equals( rxlocalpropname ) )
         return;
-      logger.info( "Process the RXLOCALLY message." );
+      logger.info( "Detected message file being marked with RXLOCALLY property so process it as incoming." );
       acceptIncomingMessage( fspae.getEntryID() );
     }
     catch ( Exception e )
@@ -290,9 +282,7 @@ public abstract class InterserverCoordinationClient implements StorageServerEven
         return;
       }
       
-      logger.info( "-------------------------------------" );
       String mhjson = fsf.getProperty( propdefdestination, false, context ).getValue();
-      logger.info( " Message Header: [" + mhjson + "] " );
       MessageHeader header = mhjsonconv.read( mhjson );
       
       if ( !header.toPlugin.equals( "*" ) && !header.toPlugin.equals( getPluginId() ))
@@ -300,6 +290,8 @@ public abstract class InterserverCoordinationClient implements StorageServerEven
       
       if ( !header.toServer.equals( "*" ) && !header.toServer.equals( getServerId() ))
         return;
+      
+      logger.info( " Incoming message has this header: [" + mhjson + "] " );
       
       if ( processMessageHeader( header ) )
         return;
