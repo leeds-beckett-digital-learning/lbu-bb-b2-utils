@@ -14,6 +14,7 @@ import javax.jms.ExceptionListener;
 import javax.jms.JMSException;
 import javax.jms.Message;
 import javax.jms.MessageConsumer;
+import javax.jms.MessageListener;
 import javax.jms.MessageProducer;
 import javax.jms.Session;
 import javax.jms.TextMessage;
@@ -32,6 +33,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
   String currenturi = null;
   Connection connection;
   Session session;
+  boolean started = false;
   
   ArrayList<PeerDestinationImpl> destinations = new ArrayList<>();
   
@@ -48,16 +50,60 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     helper.registerListener( this );
   }
 
+  /**
+   * The AMQ helper tells this object if the message broker
+   * goes down or comes up on a different uri.
+   * @param uri 
+   */
   @Override
   public synchronized void processAmqUriChange( String uri )
   {
     logger.info( "New uri for AMQ broker = " + uri );
     closeAll();
     currenturi = uri;
-    openAll();
+    openAll(); 
+    if ( started )
+      try { connection.start(); } catch (JMSException ex)
+          { logger.error("Cannot start connection to JMS", ex); }
   }    
+
+  /**
+   * Start the JMS connection. If JMS connection is lost and reconnected
+   * it will automatically start again.
+   * @throws JMSException 
+   */
+  public void start() throws JMSException
+  {
+    started = true;
+    if ( connection != null )
+      connection.start();
+  }
   
-  public synchronized void openAll()
+  /**
+   * Stop the JMS connection. If JMS connection is lost and reconnected
+   * it will NOT automatically start again.
+   * @throws JMSException 
+   */
+  public void stop() throws JMSException
+  {
+    if ( connection != null )
+      connection.stop();
+    started = false;
+  }
+  
+  /**
+   * Irreversibly shut down this destination manager.
+   * @throws JMSException 
+   */
+  public void release() throws JMSException
+  {
+    AmqHelper helper = AmqHelperFactory.getAMQHelper();
+    helper.unregisterListener( this );
+    stop();
+    closeAll();
+  }
+  
+  synchronized void openAll()
   {
     if ( currenturi == null )
       return;
@@ -71,10 +117,8 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
       connectionFactory.setUserName( "messageQueueService" );
       connectionFactory.setPassword( ConfigurationServiceFactory.getInstance().getBbProperty("bbconfig.messagequeue.password") );
       connection = connectionFactory.createConnection();
-      connection.start();     
       connection.setExceptionListener( this );
       session = connection.createSession( false, Session.AUTO_ACKNOWLEDGE );
-      logger.info( "Connected to AMQ at " + currenturi );
       for ( PeerDestinationImpl d : destinations )
       {
         try
@@ -87,6 +131,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
           logger.info( "Exception trying to open destination " + d.name , ex );
         }
       }
+      logger.info( "Connected to AMQ at " + currenturi );
     }
     catch (JMSException ex)
     {
@@ -94,7 +139,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     }
   }
   
-  private synchronized void closeAll()
+  synchronized void closeAll()
   {
     for ( PeerDestinationImpl d : destinations )
     {
@@ -158,6 +203,8 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
   
   private synchronized PeerDestinationImpl createPeerDestination( String name, boolean istopic, boolean isproducer, PeerDestinationListener listener ) throws JMSException
   {
+    if ( started )
+      throw new JMSException( "Cannot add destinations to DestinationManager when it has started." );
     logger.info( "Creating destination " + name );
     PeerDestinationImpl pd = new PeerDestinationImpl( name, istopic, isproducer, listener );
     pd.open();
@@ -165,25 +212,15 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     return pd;
   }
   
-  public synchronized void releasePeerDestination( PeerDestination pd ) throws JMSException
-  {
-    if ( pd instanceof PeerDestinationImpl )
-    {
-      PeerDestinationImpl pdi = (PeerDestinationImpl)pd;
-      logger.info( "Releasing destination " + pdi.name );
-      pdi.close();
-      pdi.destroy();
-    }
-  }
-  
   @Override
   public void onException(JMSException jmse)
   {
+    logger.error( "JMS reported exception.", jmse );
   }
   
   
   
-  class PeerDestinationImpl implements ProducingPeerDestination, Runnable
+  class PeerDestinationImpl implements ProducingPeerDestination, MessageListener
   {
     final String  name;
     final boolean istopic;
@@ -194,9 +231,6 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     Destination     destination;
     MessageProducer producer;
     MessageConsumer consumer;
-    Thread          consumerthread;
-
-    boolean destroying = false;
     
     PeerDestinationImpl( String name, boolean istopic, boolean isproducer, PeerDestinationListener listener )
     {
@@ -205,11 +239,6 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
       this.isproducer = isproducer;
       this.isconsumer = listener != null;
       this.listener   = listener;
-      if ( isconsumer )
-      {
-        consumerthread = new Thread( this );
-        consumerthread.start();
-      }
     }
 
     void open() throws JMSException
@@ -226,7 +255,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
       if ( isconsumer )
       {
         consumer = session.createConsumer( destination );
-        consumerthread.interrupt();
+        consumer.setMessageListener( this );
       }
     }
 
@@ -237,12 +266,6 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
         consumer.close();
         consumer = null;
       }
-    }
-
-    void destroy()
-    {
-      destroying = true;
-      consumerthread.interrupt();
     }
 
     @Override
@@ -259,30 +282,9 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     }
     
     @Override
-    public void run()
+    public void onMessage( Message message )
     {
-      while ( !destroying )
-      {
-        while ( consumer == null )
-        {
-          //logger.info( name + " Waiting for consumer to be created." );
-          try { Thread.sleep( 60000 ); }
-          catch (InterruptedException ex) {}
-        }
-        
-        try
-        {
-          //logger.info( name + " Waiting for incoming message." );
-          Message message = consumer.receive( 60000 );
-          if ( message != null )
-          {
-            logger.info( name + " Message received" );
-            listener.consumeMessage( this, message );
-          }
-        }
-        catch (JMSException ex) {}
-      }
-      logger.info( name + " PeerDestinationImpl thread ending." );
+      listener.consumeMessage( this, message );
     }
   }
   
