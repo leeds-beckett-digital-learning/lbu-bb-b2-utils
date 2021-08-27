@@ -33,7 +33,7 @@ publishing {
     }
     repositories {
         maven {
-            url "https://gitlab.leedsbeckett.ac.uk/api/v4/projects/366/packages/maven"
+            url "https://gitlab.leedsbeckett.ac.uk/api/v4/projects/367/packages/maven"
             credentials(HttpHeaderCredentials) {
                 name = "Private-Token"
                 value = gitLabPrivateToken // the variable resides in ~/.gradle/gradle.properties
