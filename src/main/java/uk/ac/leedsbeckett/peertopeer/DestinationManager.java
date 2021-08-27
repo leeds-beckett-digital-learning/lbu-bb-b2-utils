@@ -124,11 +124,11 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
         try
         {  
           d.open();
-          logger.info( "Opened destination " + d.name );
+          logger.info( "Opened destination " + d.pluginid );
         }
         catch (JMSException ex)
         {
-          logger.info( "Exception trying to open destination " + d.name , ex );
+          logger.info( "Exception trying to open destination " + d.pluginid , ex );
         }
       }
       logger.info( "Connected to AMQ at " + currenturi );
@@ -146,11 +146,11 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
       try
       {
         d.close();
-        logger.info( "Closed destination " + d.name );
+        logger.info( "Closed destination " + d.pluginid );
       }
       catch (JMSException ex)
       {
-        logger.info( "Exception trying to close destination " + d.name, ex );
+        logger.info( "Exception trying to close destination " + d.pluginid, ex );
       }
     }
       
@@ -165,48 +165,18 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
   }
 
   
-  public synchronized PeerDestination createPeerDestination( String name, PeerDestinationListener listener )
+  public synchronized ProducingPeerDestination createPeerDestination( String vendorid, String pluginid, String serverid, PeerDestinationListener listener )
           throws JMSException
   {
-    return createPeerDestination( name, false, false, listener );
+    return DestinationManager.this.createPeerDestination( vendorid, pluginid, serverid, true, true, listener );
   }
   
-  public synchronized ProducingPeerDestination createProducingPeerDestination( String name )
-          throws JMSException
-  {
-    return createPeerDestination( name, false, true, null );
-  }
-
-  public synchronized ProducingPeerDestination createProducingPeerDestination( String name, PeerDestinationListener listener )
-          throws JMSException
-  {
-    return createPeerDestination( name, false, true, listener );
-  }
-  
-  public synchronized PeerDestination createPeerTopicDestination( String name, PeerDestinationListener listener )
-          throws JMSException
-  {
-    return createPeerDestination( name, true, false, listener );
-  }
-  
-  public synchronized ProducingPeerDestination createProducingPeerTopicDestination( String name )
-          throws JMSException
-  {
-    return createPeerDestination( name, true, true, null );
-  }
-
-  public synchronized ProducingPeerDestination createProducingPeerTopicDestination( String name, PeerDestinationListener listener )
-          throws JMSException
-  {
-    return createPeerDestination( name, true, true, listener );
-  }
-  
-  private synchronized PeerDestinationImpl createPeerDestination( String name, boolean istopic, boolean isproducer, PeerDestinationListener listener ) throws JMSException
+  private synchronized PeerDestinationImpl createPeerDestination( String vendorid, String pluginid, String serverid, boolean istopic, boolean isproducer, PeerDestinationListener listener ) throws JMSException
   {
     if ( started )
       throw new JMSException( "Cannot add destinations to DestinationManager when it has started." );
-    logger.info( "Creating destination " + name );
-    PeerDestinationImpl pd = new PeerDestinationImpl( name, istopic, isproducer, listener );
+    logger.info( "Creating destination " + pluginid + ", " + serverid );
+    PeerDestinationImpl pd = new PeerDestinationImpl( vendorid, pluginid, serverid, istopic, isproducer, listener );
     pd.open();
     destinations.add( pd );
     return pd;
@@ -222,31 +192,38 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
   
   class PeerDestinationImpl implements ProducingPeerDestination, MessageListener
   {
-    final String  name;
+    final String  vendorid;
+    final String  pluginid;
+    final String  serverid;
     final boolean istopic;
     final boolean isproducer;
     final boolean isconsumer;
     final PeerDestinationListener listener;
+    final String messageselector;
     
     Destination     destination;
     MessageProducer producer;
     MessageConsumer consumer;
     
-    PeerDestinationImpl( String name, boolean istopic, boolean isproducer, PeerDestinationListener listener )
+    PeerDestinationImpl( String  vendorid, String pluginid, String serverid, boolean istopic, boolean isproducer, PeerDestinationListener listener )
     {
-      this.name       = name;
+      this.vendorid   = vendorid;
+      this.pluginid   = pluginid;
+      this.serverid   = serverid;
       this.istopic    = istopic;
       this.isproducer = isproducer;
       this.isconsumer = listener != null;
       this.listener   = listener;
+      
+      messageselector = "LBUVendorID = '" + vendorid + "' AND LBUPluginID = '" + pluginid + "' AND ( LBUToServerID = '*' OR LBUToServerID = '" + serverid + "' )";
     }
 
     void open() throws JMSException
     {
       if ( istopic )
-        destination = session.createTopic( name );
+        destination = session.createTopic(pluginid );
       else
-        destination = session.createQueue( name );
+        destination = session.createQueue(pluginid );
       if ( isproducer )
       {
         producer = session.createProducer( destination );
@@ -254,7 +231,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
       }
       if ( isconsumer )
       {
-        consumer = session.createConsumer( destination );
+        consumer = session.createConsumer( destination, messageselector );
         consumer.setMessageListener( this );
       }
     }
@@ -269,15 +246,19 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     }
 
     @Override
-    public void send( String str ) throws JMSException
+    public TextMessage createTextMessage() throws JMSException
+    {
+      return session.createTextMessage();
+    }
+    
+    @Override
+    public void send( Message message ) throws JMSException
     {
       if ( producer == null )
       {
-        logger.info( name + " Can't send message, there is no producer." );
+        logger.info(pluginid + " Can't send message, there is no producer." );
         return;
       }
-      TextMessage message = session.createTextMessage();
-      message.setText( str );
       producer.send( message );
     }
     
@@ -286,6 +267,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     {
       listener.consumeMessage( this, message );
     }
+
   }
   
 }

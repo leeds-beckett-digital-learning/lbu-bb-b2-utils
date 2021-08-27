@@ -7,6 +7,7 @@ package uk.ac.leedsbeckett.peertopeer;
 
 import javax.jms.JMSException;
 import javax.jms.Message;
+import javax.jms.TextMessage;
 
 /**
  *
@@ -14,5 +15,6 @@ import javax.jms.Message;
  */
 public interface ProducingPeerDestination extends PeerDestination
 {
-  public void send( String message ) throws JMSException;
+  public TextMessage createTextMessage() throws JMSException;
+  public void send( Message message ) throws JMSException;
 }
