@@ -3,7 +3,7 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package uk.ac.leedsbeckett.peertopeer;
+package uk.ac.leedsbeckett.bbb2utils.peertopeer;
 
 import javax.jms.JMSException;
 import javax.jms.Message;

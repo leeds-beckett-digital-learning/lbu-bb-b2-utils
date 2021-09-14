@@ -3,7 +3,7 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package uk.ac.leedsbeckett.peertopeer;
+package uk.ac.leedsbeckett.bbb2utils.peertopeer;
 
 import blackboard.platform.config.ConfigurationServiceFactory;
 import java.util.ArrayList;
@@ -37,14 +37,14 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
   
   ArrayList<PeerDestinationImpl> destinations = new ArrayList<>();
   
-  public DestinationManager( Logger logger )
+  public DestinationManager(Logger logger)
   {
     if ( logger != null )
       this.logger = logger;
     else
     {
-      this.logger = Logger.getLogger(this.getClass());
-      this.logger.setLevel( Level.OFF );
+      logger = Logger.getLogger(this.getClass());
+      logger.setLevel( Level.OFF );
     }
     AmqHelper helper = AmqHelperFactory.getAMQHelper();
     helper.registerListener( this );
@@ -60,7 +60,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
   {
     logger.info( "New uri for AMQ broker = " + uri );
     closeAll();
-    currenturi = uri;
+    currenturi = "failover:(" + uri + ")?initialReconnectDelay=100&maxReconnectAttempts=-1";
     openAll(); 
     if ( started )
       try { connection.start(); } catch (JMSException ex)
@@ -87,7 +87,10 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
   public void stop() throws JMSException
   {
     if ( connection != null )
+    {
+      connection.setExceptionListener(null);
       connection.stop();
+    }
     started = false;
   }
   
@@ -102,7 +105,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     stop();
     closeAll();
   }
-  
+
   synchronized void openAll()
   {
     if ( currenturi == null )
@@ -215,7 +218,10 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
       this.isconsumer = listener != null;
       this.listener   = listener;
       
-      messageselector = "LBUVendorID = '" + vendorid + "' AND LBUPluginID = '" + pluginid + "' AND ( LBUToServerID = '*' OR LBUToServerID = '" + serverid + "' )";
+      messageselector = 
+              "LBUVendorID = '" + vendorid + 
+              "' AND LBUPluginID = '" + pluginid + 
+              "' AND ( LBUToServerID = '*' OR LBUToServerID = '" + serverid + "' )";
     }
 
     void open() throws JMSException
@@ -228,11 +234,13 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
       {
         producer = session.createProducer( destination );
         producer.setDeliveryMode( DeliveryMode.NON_PERSISTENT );
+        logger.info( "Opened producer" );
       }
       if ( isconsumer )
       {
-        consumer = session.createConsumer( destination, messageselector );
+        consumer = session.createConsumer( destination ); //, messageselector );
         consumer.setMessageListener( this );
+        logger.info( "Opened consumer." );
       }
     }
 
@@ -265,6 +273,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     @Override
     public void onMessage( Message message )
     {
+      logger.info( "Message Rxed" );
       listener.consumeMessage( this, message );
     }
 

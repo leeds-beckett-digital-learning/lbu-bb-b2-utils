@@ -3,13 +3,20 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package uk.ac.leedsbeckett.peertopeer;
+package uk.ac.leedsbeckett.bbb2utils.peertopeer;
+
+import javax.jms.Message;
 
 /**
  *
  * @author jon
  */
-public interface AmqUriListener
+public interface BuildingBlockPeerMessageListener
 {
-  public void processAmqUriChange( String uri );
+
+  /**
+   *
+   * @param message
+   */
+  public void consumeMessage( Message message );  
 }
