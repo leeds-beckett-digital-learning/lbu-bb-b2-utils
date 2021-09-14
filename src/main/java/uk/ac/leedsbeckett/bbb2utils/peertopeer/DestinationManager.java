@@ -238,7 +238,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
       }
       if ( isconsumer )
       {
-        consumer = session.createConsumer( destination ); //, messageselector );
+        consumer = session.createConsumer( destination, messageselector );
         consumer.setMessageListener( this );
         logger.info( "Opened consumer." );
       }
@@ -273,7 +273,6 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
     @Override
     public void onMessage( Message message )
     {
-      logger.info( "Message Rxed" );
       listener.consumeMessage( this, message );
     }
 
