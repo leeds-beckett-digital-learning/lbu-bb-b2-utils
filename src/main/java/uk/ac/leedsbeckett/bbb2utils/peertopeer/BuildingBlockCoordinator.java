@@ -19,6 +19,9 @@ import org.apache.log4j.Logger;
  */
 public class BuildingBlockCoordinator implements PeerDestinationListener
 {
+  boolean started = false;
+  boolean failed = false;
+  
   Logger logger;
   DestinationManager destinationmanager;
   ProducingPeerDestination destination;
@@ -38,16 +41,18 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     this.serverid = serverid;
     this.listener = listener;
     pluginid = buildingblockvid + "_" + buildingblockhandle;
-    destinationmanager = new DestinationManager( logger );
-    destination = destinationmanager.createPeerDestination( buildingblockvid, buildingblockhandle, serverid, this );
-    destinationmanager.start();
-    sendStartingMessage();
-    sendDiscoverMessage();
+  }
+  
+  public void start()
+  {
+    StarterThread st = new StarterThread();
+    st.start();
   }
   
   public void destroy() throws JMSException
   {
-    sendStoppingMessage();
+    if ( started && !failed )
+      sendStoppingMessage();
     destinationmanager.release();    
   }
   
@@ -156,6 +161,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
  
   public synchronized void sendTextMessage( String str, String toserverid ) throws JMSException
   {
+    if ( !started || failed ) return;
     TextMessage message = destination.createTextMessage();
     message.setStringProperty( "LBUToServerID",    toserverid     );
     message.setStringProperty( "LBUFromServerID",  serverid       );
@@ -173,6 +179,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
   
   synchronized void sendCoordinationMessage( String command, String to ) throws JMSException
   {
+    if ( !started || failed ) return;
     TextMessage message = destination.createTextMessage();
     message.setStringProperty( "LBUToServerID",    to             );
     message.setStringProperty( "LBUFromServerID",  serverid       );
@@ -213,6 +220,35 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     sendCoordinationMessage( "PONG", to );
   }
 
+  
+  class StarterThread extends Thread
+  {
+    @Override
+    public void run()
+    {
+      try { Thread.sleep( 1000 ); }
+      catch (InterruptedException ex) {}
+      
+      try
+      {
+        destinationmanager = new DestinationManager( logger );
+        destination = destinationmanager.createPeerDestination( 
+                buildingblockvid, 
+                buildingblockhandle, 
+                serverid, 
+                BuildingBlockCoordinator.this );
+        destinationmanager.start();    
+        sendStartingMessage();
+        sendDiscoverMessage();
+        started = true;
+      }
+      catch (JMSException ex)
+      {
+        logger.error( "Exception trying to start messaging system.", ex );
+        failed = true;
+      }
+    }
+  }
 
   class PingerThread extends Thread
   {
@@ -239,7 +275,8 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
         try
         { 
           Thread.sleep( (pingrate/2 + random.nextInt(pingrate) )*1000L );
-          try { sendPingMessage(); } catch ( JMSException ex ) {}
+          if ( started && !failed )
+            try { sendPingMessage(); } catch ( JMSException ex ) {}
         }
         catch (InterruptedException ex) {  }
       }
