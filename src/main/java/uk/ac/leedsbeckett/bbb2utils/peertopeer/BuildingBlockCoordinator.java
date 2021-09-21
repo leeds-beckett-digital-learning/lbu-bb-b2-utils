@@ -14,7 +14,10 @@ import javax.jms.TextMessage;
 import org.apache.log4j.Logger;
 
 /**
- *
+ * This is used by a building block to coordinate between instances running on
+ * a cluster of servers.  To use it the building block needs to have this
+ * permission added to its manifest:
+ * &lt;permission type="socket" name="*" actions="connect,resolve"/&gt;
  * @author jon
  */
 public class BuildingBlockCoordinator implements PeerDestinationListener
@@ -32,7 +35,19 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
 
   Object pingerlock = new Object(); 
   PingerThread pingerthread = null;
-  
+
+/**
+ * Intantiates, but doesn't start, a tool to allow messaging between
+ * instances of a building block. Parameters are used to identify the name
+ * of the JMS destination that will be used.
+ * 
+ * @param buildingblockvid Identifies the destination.
+ * @param buildingblockhandle Identifies the destination.
+ * @param serverid Identifies this instance, distinguishing it from others.
+ * @param listener Object that will be told about incoming messages.
+ * @param logger A custom logger for errors.
+ * @throws JMSException 
+ */  
   public BuildingBlockCoordinator( String buildingblockvid, String buildingblockhandle, String serverid, BuildingBlockPeerMessageListener listener, Logger logger ) throws JMSException
   {
     this.logger = logger;
@@ -43,12 +58,20 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     pluginid = buildingblockvid + "_" + buildingblockhandle;
   }
   
+  /**
+   * Starts the messaging asynchronously. It creates a thread that will
+   * start messaging after a short delay but returns immediately.
+   */
   public void start()
   {
     StarterThread st = new StarterThread();
     st.start();
   }
   
+  /**
+   * Stops the messaging system such that it cannot be started again.
+   * @throws JMSException 
+   */
   public void destroy() throws JMSException
   {
     if ( started && !failed )
@@ -56,6 +79,12 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     destinationmanager.release();    
   }
   
+  /**
+   * Pings are periodically sent and peers will send pongs back. This is
+   * for debugging. Default is '0'.
+   * @param newpingrate In seconds - although a random element is used 
+   * from 50% to 150% of the value set. Zero means switch off pings.
+   */
   public void setPingRate( int newpingrate )
   {
     synchronized ( pingerlock )
@@ -85,6 +114,11 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     }
   }
   
+  /**
+   * Don't use this method - it is for internal use.
+   * @param destination
+   * @param message 
+   */
   @Override
   public void consumeMessage(PeerDestination destination, Message message)
   {
@@ -154,11 +188,24 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     }
   }
   
+  /**
+   * Send an arbitrary message that peers will understand. Send it to all the
+   * connected peers.
+   * 
+   * @param str The message.
+   * @throws JMSException 
+   */
   public void sendTextMessageToAll( String str ) throws JMSException
   {
     sendTextMessage( str, "*" );
   }
  
+  /** 
+   * Send an arbitrary message that peers will understand.
+   * @param str The message
+   * @param toserverid The server that should receive the message.
+   * @throws JMSException 
+   */
   public synchronized void sendTextMessage( String str, String toserverid ) throws JMSException
   {
     if ( !started || failed ) return;
