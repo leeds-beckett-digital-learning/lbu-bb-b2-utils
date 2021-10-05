@@ -122,12 +122,14 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
   @Override
   public void consumeMessage(PeerDestination destination, Message message)
   {
+    logger.debug( "Consuming message." );
     try
     {
       String to = message.getStringProperty( "LBUToServerID" );
       if ( to == null || ( !"*".equals(to) && !serverid.equals(to) ) )
         return;
       String type = message.getStringProperty( "LBUType" );
+      logger.debug( "Consuming message of type " + type );
       if ( "coordination".equals( type ) )
         consumeCoordinationMessage( destination, message );
       else if ( listener != null )
@@ -147,7 +149,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
       TextMessage tm = (TextMessage)message;
       String subtype = message.getStringProperty( "LBUSubType" );
       String from = message.getStringProperty( "LBUFromServerID" );
-      logger.info( serverid + " received " + subtype + " from " + from );
+      logger.debug( serverid + " received " + subtype + " from " + from );
       switch ( subtype )
       {
         case "STOPPING":
@@ -208,7 +210,11 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
    */
   public synchronized void sendTextMessage( String str, String toserverid ) throws JMSException
   {
-    if ( !started || failed ) return;
+    if ( !started || failed )
+    {
+      logger.error( "Unable to send text message. Not started or starting failed." );
+      return;
+    }
     TextMessage message = destination.createTextMessage();
     message.setStringProperty( "LBUToServerID",    toserverid     );
     message.setStringProperty( "LBUFromServerID",  serverid       );
@@ -216,6 +222,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     message.setStringProperty( "LBUType",          "" );
     message.setStringProperty( "LBUSubType",       ""        );
     message.setText( str );
+    logger.debug( "Sending text message." );
     destination.send( message );
   }
  
@@ -226,7 +233,11 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
   
   synchronized void sendCoordinationMessage( String command, String to ) throws JMSException
   {
-    if ( !started || failed ) return;
+    if ( !started || failed )
+    {
+      logger.error( "Unable to send text message. Not started or starting failed." );
+      return;
+    }
     TextMessage message = destination.createTextMessage();
     message.setStringProperty( "LBUToServerID",    to             );
     message.setStringProperty( "LBUFromServerID",  serverid       );
@@ -234,6 +245,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     message.setStringProperty( "LBUType",          "coordination" );
     message.setStringProperty( "LBUSubType",       command        );
     message.setText( "" );
+    logger.debug( "Sending coordination message." );
     destination.send( message );
   }
   
@@ -275,19 +287,24 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     {
       try { Thread.sleep( 1000 ); }
       catch (InterruptedException ex) {}
+      logger.debug( "Starting building block coordinator." );
       
       try
       {
         destinationmanager = new DestinationManager( logger );
         destination = destinationmanager.createPeerDestination( 
-                buildingblockvid, 
-                buildingblockhandle, 
+                pluginid, 
                 serverid, 
                 BuildingBlockCoordinator.this );
         destinationmanager.start();    
-        sendStartingMessage();
-        sendDiscoverMessage();
         started = true;
+        logger.debug( "Destination manager started." );
+        
+        sendStartingMessage();
+        logger.debug( "Sent 'starting'." );
+        sendDiscoverMessage();
+        logger.debug( "Sent 'discover'." );
+        logger.debug( "Building block coordinator started." );
       }
       catch (JMSException ex)
       {
