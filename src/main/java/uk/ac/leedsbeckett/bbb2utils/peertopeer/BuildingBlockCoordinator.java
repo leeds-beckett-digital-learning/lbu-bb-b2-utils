@@ -6,8 +6,10 @@
 package uk.ac.leedsbeckett.bbb2utils.peertopeer;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Random;
-import java.util.logging.Level;
 import javax.jms.JMSException;
 import javax.jms.Message;
 import javax.jms.TextMessage;
@@ -28,8 +30,10 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
   Logger logger;
   DestinationManager destinationmanager;
   ProducingPeerDestination destination;
-  ArrayList<String> knownpeers = new ArrayList<>();
+  HashMap<String,PeerRecord> knownpeers = new HashMap<>();
+  ArrayList<PeerRecord> peersbyage = new ArrayList<>();
   String buildingblockvid, buildingblockhandle, serverid, pluginid;
+  long starttime;
   BuildingBlockPeerMessageListener listener;
   int pingrate=0;
 
@@ -153,9 +157,9 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
       switch ( subtype )
       {
         case "STOPPING":
-          if ( knownpeers.contains( from ) )
+          if ( this.hasPeer( from ) )
           {
-            knownpeers.remove( from );
+            this.removePeer( from );
             updating=true;
           }
           break;
@@ -163,9 +167,10 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
           sendRunningMessage();
         case "STARTING":
         case "RUNNING":
-          if ( !knownpeers.contains( from ) )
+          if ( !this.hasPeer( from ) )
           {
-            knownpeers.add( from );
+            long fromstarttime = Long.parseLong( message.getStringProperty( "LBUFromServerStartTime" ) );
+            this.addPeer( from, fromstarttime );
             updating=true;
           }
           break;
@@ -183,8 +188,8 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
       {
         logger.info( "-----------------------" );
         logger.info( "Updated peer list." );
-        for ( String name : knownpeers )
-          logger.info( name );
+        for ( PeerRecord r : this.getPeerRecordList() )
+          logger.info( r.name + " started " + r.starttime );
         logger.info( "-----------------------" );
       }
     }
@@ -200,6 +205,20 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
   public void sendTextMessageToAll( String str ) throws JMSException
   {
     sendTextMessage( str, "*" );
+  }
+ 
+  /**
+   * Send an arbitrary message that peers will understand. Send it to the
+   * oldest connected peer.
+   * 
+   * @param str The message.
+   * @throws JMSException 
+   */
+  public void sendTextMessageToOldest( String str ) throws JMSException
+  {
+    String name = getOldestPeerName();
+    if ( name != null)
+      sendTextMessage( str, name );
   }
  
   /** 
@@ -239,11 +258,12 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
       return;
     }
     TextMessage message = destination.createTextMessage();
-    message.setStringProperty( "LBUToServerID",    to             );
-    message.setStringProperty( "LBUFromServerID",  serverid       );
-    message.setStringProperty( "LBUPluginID",      pluginid       );
-    message.setStringProperty( "LBUType",          "coordination" );
-    message.setStringProperty( "LBUSubType",       command        );
+    message.setStringProperty( "LBUToServerID",          to                         );
+    message.setStringProperty( "LBUFromServerID",        serverid                   );
+    message.setStringProperty( "LBUFromServerStartTime", Long.toString( starttime ) );
+    message.setStringProperty( "LBUPluginID",            pluginid                   );
+    message.setStringProperty( "LBUType",                "coordination"             );
+    message.setStringProperty( "LBUSubType",             command                    );
     message.setText( "" );
     logger.debug( "Sending coordination message." );
     destination.send( message );
@@ -298,6 +318,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
                 BuildingBlockCoordinator.this );
         destinationmanager.start();    
         started = true;
+        starttime = System.currentTimeMillis();
         logger.debug( "Destination manager started." );
         
         sendStartingMessage();
@@ -345,5 +366,62 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
         catch (InterruptedException ex) {  }
       }
     }    
+  }
+
+  synchronized List<PeerRecord> getPeerRecordList()
+  {
+    LinkedList<PeerRecord> list = new LinkedList<>();
+    for ( PeerRecord r : this.peersbyage )
+      list.add( r );
+    return list;
+  }
+  
+  synchronized String getOldestPeerName()
+  {
+    if ( this.peersbyage.isEmpty() ) return null;
+    return this.peersbyage.get( 0 ).name;
+  }
+  
+  synchronized PeerRecord getPeer( String name )
+  {
+    return this.knownpeers.get( name );
+  }
+  
+  synchronized boolean hasPeer( String name )
+  {
+    return this.knownpeers.containsKey( name );
+  }
+  
+  synchronized void removePeer( String name )
+  {
+    PeerRecord record = this.knownpeers.get( name );
+    this.knownpeers.remove( name );
+    this.peersbyage.remove( record );
+  }
+  
+  synchronized void addPeer( String name, long starttime )
+  {
+    PeerRecord record = new PeerRecord( name, starttime );
+    this.knownpeers.put( name, record );
+    this.peersbyage.add( record );
+    this.peersbyage.sort(( PeerRecord o1, PeerRecord o2 ) ->
+    {
+      if ( o1.starttime < o2.starttime ) return -1;
+      if ( o1.starttime > o2.starttime ) return  1;
+      return 0;
+    });
+  }
+  
+  class PeerRecord
+  {
+    String name;
+    long starttime;
+
+    public PeerRecord( String name, long starttime )
+    {
+      this.name = name;
+      this.starttime = starttime;
+    }
+    
   }
 }
