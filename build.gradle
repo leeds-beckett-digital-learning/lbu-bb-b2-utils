@@ -33,13 +33,11 @@ publishing {
     }
     repositories {
         maven {
-            url "https://gitlab.leedsbeckett.ac.uk/api/v4/projects/367/packages/maven"
-            credentials(HttpHeaderCredentials) {
-                name = "Private-Token"
-                value = gitLabPrivateToken // the variable resides in ~/.gradle/gradle.properties
-            }
-            authentication {
-                header(HttpHeaderAuthentication)
+            name = "GitHubPackages"
+            url "https://maven.pkg.github.com/leeds-beckett-digital-learning/lbu-bb-b2-utils"
+            credentials {
+                username = gitHubUserName
+                password = gitHubPrivateToken // the variable resides in ~/.gradle/gradle.properties
             }
         }
     }
