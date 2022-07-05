@@ -72,7 +72,8 @@ public class AmqHelper implements PeerEventListener
   public void peerAdded( PeerService ps )
   {
     if ( !listensToService( ps.getServiceId() ) ) return;  // should never happen but check anyway
-    if ( uri != null ) return;
+    // Assumed peer would be removed before new peer is added but not so sure now...
+    // if ( uri != null ) return; 
     uri = ps.getPayload();
     tellListeners( uri );
   }

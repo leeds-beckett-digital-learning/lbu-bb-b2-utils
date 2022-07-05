@@ -70,8 +70,14 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
   {
     logger.info( "New uri for AMQ broker = " + uri );
     closeAll();
+    if ( uri==null )
+    {
+      logger.info( "No AMQ broker at present." );
+      currenturi = null;
+      return;
+    }
     currenturi = "failover:(" + uri + ")?initialReconnectDelay=100&startupMaxReconnectAttempts=10&maxReconnectAttempts=20";
-    logger.info( "Failover uri for AMQ broker = " + currenturi );
+    logger.info( "Failover uri for new AMQ broker = " + currenturi );
     openAll(); 
     if ( started )
       try { connection.start(); } catch (JMSException ex)
@@ -95,7 +101,7 @@ public class DestinationManager implements AmqUriListener, ExceptionListener
    * it will NOT automatically start again.
    * @throws JMSException 
    */
-  public void stop() throws JMSException
+  private void stop() throws JMSException
   {
     if ( connection != null )
     {
