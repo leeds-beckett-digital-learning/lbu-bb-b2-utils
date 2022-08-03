@@ -15,15 +15,20 @@
  */
 package uk.ac.leedsbeckett.bbb2utils.peertopeer;
 
+import blackboard.platform.messagequeue.MessageQueueException;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Random;
+import java.util.logging.Level;
 import javax.jms.JMSException;
 import javax.jms.Message;
 import javax.jms.TextMessage;
 import org.apache.log4j.Logger;
+import uk.ac.leedsbeckett.bbb2utils.bbmessaging.BBMessageListener;
+import uk.ac.leedsbeckett.bbb2utils.bbmessaging.BBTopicSubscriber;
 
 /**
  * This is used by a building block to coordinate between instances running on
@@ -32,12 +37,16 @@ import org.apache.log4j.Logger;
  * &lt;permission type="socket" name="*" actions="connect,resolve"/&gt;
  * @author jon
  */
-public class BuildingBlockCoordinator implements PeerDestinationListener
+public class BuildingBlockCoordinator implements PeerDestinationListener, BBMessageListener
 {
   boolean started = false;
   boolean failed = false;
   
   Logger logger;
+  
+  private static final String EXPERIMENTAL_TOPIC_NAME_PREFIX = "experimental-bbcoordinator-";
+  BBTopicSubscriber topicsubscriber;
+  
   DestinationManager destinationmanager;
   ProducingPeerDestination destination;
   HashMap<String,PeerRecord> knownpeers = new HashMap<>();
@@ -70,6 +79,8 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     this.serverid = serverid;
     this.listener = listener;
     pluginid = buildingblockvid + "_" + buildingblockhandle;
+    topicsubscriber = new BBTopicSubscriber( EXPERIMENTAL_TOPIC_NAME_PREFIX + pluginid );
+    topicsubscriber.registerPeerDestinationListener( BuildingBlockCoordinator.this );
   }
   
   /**
@@ -90,6 +101,10 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
   {
     if ( started && !failed )
       sendStoppingMessage();
+
+    topicsubscriber.unregisterPeerDestinationListener( BuildingBlockCoordinator.this );
+    topicsubscriber.unregister();
+
     destinationmanager.release();    
   }
   
@@ -251,6 +266,14 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     message.setStringProperty( "LBUType",          "" );
     message.setStringProperty( "LBUSubType",       ""        );
     message.setText( str );
+
+    logger.debug( "Sending message via BB connection pool." );
+    try {
+      topicsubscriber.sendMessage( message );
+    } catch (MessageQueueException ex) {
+      logger.error( "Unable to send message via BB connection pool. ", ex );
+    }
+
     logger.debug( "Sending text message." );
     destination.send( message );
   }
@@ -275,7 +298,15 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     message.setStringProperty( "LBUType",                "coordination"             );
     message.setStringProperty( "LBUSubType",             command                    );
     message.setText( "" );
-    logger.debug( "Sending coordination message." );
+    
+    logger.debug( "Sending message via BB connection pool." );
+    try {
+      topicsubscriber.sendMessage( message );
+    } catch (MessageQueueException ex) {
+      logger.error( "Unable to send message via BB connection pool. ", ex );
+    }
+    
+    logger.debug( "Sending coordination message the old way." );
     destination.send( message );
   }
   
@@ -309,6 +340,25 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
     sendCoordinationMessage( "PONG", to );
   }
 
+  @Override
+  public void onMessage(Message msg)
+  {
+    logger.debug( "Received message via BB connection pool. " + msg.toString() );
+    try
+    {
+      Enumeration e = msg.getPropertyNames();
+      while ( e.hasMoreElements() )
+      {
+        String name = (String) e.nextElement();
+        logger.debug( "Propery Name: " + name + " = " + msg.getStringProperty( name ) );
+      }
+    }
+    catch (JMSException ex)
+    {
+      logger.error( "Ignoring exception while listing message properties.", ex );
+    }
+  }
+
   
   class StarterThread extends Thread
   {
@@ -321,6 +371,8 @@ public class BuildingBlockCoordinator implements PeerDestinationListener
       
       try
       {
+        topicsubscriber.register();
+        
         destinationmanager = new DestinationManager( logger );
         destination = destinationmanager.createPeerDestination( 
                 pluginid, 
