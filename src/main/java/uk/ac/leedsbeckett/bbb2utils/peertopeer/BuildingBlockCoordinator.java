@@ -15,20 +15,26 @@
  */
 package uk.ac.leedsbeckett.bbb2utils.peertopeer;
 
+import blackboard.platform.BbServiceManager;
 import blackboard.platform.messagequeue.MessageQueueException;
+import blackboard.platform.messagequeue.MessageQueueService;
+import blackboard.platform.messagequeue.MessageQueueUtil;
+import blackboard.platform.messagequeue.impl.activemq.ActiveMQConnectionPool;
+import blackboard.platform.messagequeue.impl.activemq.ActiveMQMessageQueueService;
+import blackboard.platform.messagequeue.impl.activemq.ActiveMQTopicSubscriber;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Properties;
 import java.util.Random;
-import java.util.logging.Level;
 import javax.jms.JMSException;
 import javax.jms.Message;
 import javax.jms.TextMessage;
+import javax.jms.TopicPublisher;
+import org.apache.activemq.ActiveMQConnection;
+import org.apache.activemq.ActiveMQTopicSession;
 import org.apache.log4j.Logger;
-import uk.ac.leedsbeckett.bbb2utils.bbmessaging.BBMessageListener;
-import uk.ac.leedsbeckett.bbb2utils.bbmessaging.BBTopicSubscriber;
 
 /**
  * This is used by a building block to coordinate between instances running on
@@ -37,21 +43,19 @@ import uk.ac.leedsbeckett.bbb2utils.bbmessaging.BBTopicSubscriber;
  * &lt;permission type="socket" name="*" actions="connect,resolve"/&gt;
  * @author jon
  */
-public class BuildingBlockCoordinator implements PeerDestinationListener, BBMessageListener
+public class BuildingBlockCoordinator extends ActiveMQTopicSubscriber
 {
+  public static final int PEER_TIMEOUT = 15 * 60 * 1000;
+  
   boolean started = false;
   boolean failed = false;
   
-  Logger logger;
+  final Logger logger;
+  final String serverid, pluginid, topic;
   
-  private static final String EXPERIMENTAL_TOPIC_NAME_PREFIX = "experimental-bbcoordinator-";
-  BBTopicSubscriber topicsubscriber;
   
-  DestinationManager destinationmanager;
-  ProducingPeerDestination destination;
   HashMap<String,PeerRecord> knownpeers = new HashMap<>();
   ArrayList<PeerRecord> peersbyage = new ArrayList<>();
-  String buildingblockvid, buildingblockhandle, serverid, pluginid;
   long starttime;
   BuildingBlockPeerMessageListener listener;
   int pingrate=0;
@@ -73,14 +77,12 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
  */  
   public BuildingBlockCoordinator( String buildingblockvid, String buildingblockhandle, String serverid, BuildingBlockPeerMessageListener listener, Logger logger ) throws JMSException
   {
+    super( "lbucoordination_" + buildingblockvid + "_" + buildingblockhandle );
+    this.pluginid = buildingblockvid + "_" + buildingblockhandle;
+    this.topic = "lbucoordination_" + pluginid;
     this.logger = logger;
-    this.buildingblockvid = buildingblockvid;
-    this.buildingblockhandle = buildingblockhandle;
     this.serverid = serverid;
     this.listener = listener;
-    pluginid = buildingblockvid + "_" + buildingblockhandle;
-    topicsubscriber = new BBTopicSubscriber( EXPERIMENTAL_TOPIC_NAME_PREFIX + pluginid );
-    topicsubscriber.registerPeerDestinationListener( BuildingBlockCoordinator.this );
   }
   
   /**
@@ -89,6 +91,9 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
    */
   public void start()
   {
+    started = true;
+    starttime = System.currentTimeMillis();
+    register();
     StarterThread st = new StarterThread();
     st.start();
   }
@@ -99,13 +104,10 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
    */
   public void destroy() throws JMSException
   {
+    setPingRate( 0 );
+    unregister();
     if ( started && !failed )
       sendStoppingMessage();
-
-    topicsubscriber.unregisterPeerDestinationListener( BuildingBlockCoordinator.this );
-    topicsubscriber.unregister();
-
-    destinationmanager.release();    
   }
   
   /**
@@ -143,34 +145,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
     }
   }
   
-  /**
-   * Don't use this method - it is for internal use.
-   * @param destination
-   * @param message 
-   */
-  @Override
-  public void consumeMessage(PeerDestination destination, Message message)
-  {
-    logger.debug( "Consuming message." );
-    try
-    {
-      String to = message.getStringProperty( "LBUToServerID" );
-      if ( to == null || ( !"*".equals(to) && !serverid.equals(to) ) )
-        return;
-      String type = message.getStringProperty( "LBUType" );
-      logger.debug( "Consuming message of type " + type );
-      if ( "coordination".equals( type ) )
-        consumeCoordinationMessage( destination, message );
-      else if ( listener != null )
-        listener.consumeMessage( message );
-    }
-    catch (JMSException ex)
-    {
-      logger.error( "Exception while consuming message ", ex );
-    }
-  }
-  
-  void consumeCoordinationMessage(PeerDestination destination, Message message) throws JMSException
+  void consumeCoordinationMessage( Message message ) throws JMSException
   {
     if ( message instanceof TextMessage )
     {
@@ -178,7 +153,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
       TextMessage tm = (TextMessage)message;
       String subtype = message.getStringProperty( "LBUSubType" );
       String from = message.getStringProperty( "LBUFromServerID" );
-      logger.debug( serverid + " received " + subtype + " from " + from );
+      logger.debug( "<----- " + serverid + " received " + subtype + " from " + from );
       switch ( subtype )
       {
         case "STOPPING":
@@ -188,6 +163,7 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
             updating=true;
           }
           break;
+          
         case "DISCOVER":
           sendRunningMessage();
         case "STARTING":
@@ -196,14 +172,17 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
           {
             long fromstarttime = Long.parseLong( message.getStringProperty( "LBUFromServerStartTime" ) );
             this.addPeer( from, fromstarttime );
-            updating=true;
           }
+          touchPeer( from );
+          updating=true;
           break;
+          
         case "PING":
           if ( !serverid.equals( from ) )
             sendPongMessage( from );
-          break;
         case "PONG":
+          touchPeer( from );
+          updating=true;
           break;
         default:
           break;
@@ -211,11 +190,8 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
 
       if ( updating )
       {
-        logger.info( "-----------------------" );
-        logger.info( "Updated peer list." );
-        for ( PeerRecord r : this.getPeerRecordList() )
-          logger.info( r.name + " started " + r.starttime );
-        logger.info( "-----------------------" );
+        thinPeers();
+        logPeers();
       }
     }
   }
@@ -246,6 +222,51 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
       sendTextMessage( str, name );
   }
  
+  /**
+   * Send an arbitrary message that peers will understand. Send it to the
+   * oldest connected peer.
+   * 
+   * @param str The message.
+   * @throws JMSException 
+   */
+  public void sendTextMessageToNewest( String str ) throws JMSException
+  {
+    String name = getNewestPeerName();
+    if ( name != null)
+      sendTextMessage( str, name );
+  }
+ 
+  
+  
+  public void sendMessage( String text, Properties properties ) throws MessageQueueException
+  {
+    ActiveMQConnection con = null;
+    ActiveMQTopicSession session = null;
+    TopicPublisher publisher = null;
+    final ActiveMQConnectionPool activeMQConnectionPool = this.getConnectionPool();
+    try
+    {
+      con = (ActiveMQConnection) activeMQConnectionPool.get();
+      session = (ActiveMQTopicSession) con.createTopicSession(false, 1);
+      publisher = session.createPublisher( session.createTopic( topic ) );
+      TextMessage message = session.createTextMessage( text );
+      for ( Object key : properties.keySet() )
+        message.setStringProperty( key.toString(), properties.getProperty( key.toString() ) );
+      publisher.publish( message );
+    }
+    catch ( Exception ex )
+    {
+      throw new MessageQueueException( "Could not send AMQ message.", ex);
+    }
+    finally
+    {
+      MessageQueueUtil.closeMessageQueueObjects( session, null, null, publisher, null);
+      MessageQueueUtil.releaseConnection(activeMQConnectionPool, con);
+    }
+  }
+  
+  
+  
   /** 
    * Send an arbitrary message that peers will understand.
    * @param str The message
@@ -259,23 +280,16 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
       logger.error( "Unable to send text message. Not started or starting failed." );
       return;
     }
-    TextMessage message = destination.createTextMessage();
-    message.setStringProperty( "LBUToServerID",    toserverid     );
-    message.setStringProperty( "LBUFromServerID",  serverid       );
-    message.setStringProperty( "LBUPluginID",      pluginid       );
-    message.setStringProperty( "LBUType",          "" );
-    message.setStringProperty( "LBUSubType",       ""        );
-    message.setText( str );
+    Properties p = new Properties();
+    p.setProperty( "LBUToServerID",    toserverid     );
+    p.setProperty( "LBUFromServerID",  serverid       );
+    p.setProperty( "LBUPluginID",      pluginid       );
+    p.setProperty( "LBUType",          "" );
+    p.setProperty( "LBUSubType",       ""        );
 
-    logger.debug( "Sending message via BB connection pool." );
-    try {
-      topicsubscriber.sendMessage( message );
-    } catch (MessageQueueException ex) {
-      logger.error( "Unable to send message via BB connection pool. ", ex );
+    logger.debug( "-----> " + serverid + " sending user message to " + toserverid );
+    try { sendMessage( str, p ); } catch (MessageQueueException ex) { logger.error( "Unable to send message via BB connection pool. ", ex );
     }
-
-    logger.debug( "Sending text message." );
-    destination.send( message );
   }
  
   void sendCoordinationMessage( String command ) throws JMSException
@@ -290,24 +304,16 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
       logger.error( "Unable to send text message. Not started or starting failed." );
       return;
     }
-    TextMessage message = destination.createTextMessage();
-    message.setStringProperty( "LBUToServerID",          to                         );
-    message.setStringProperty( "LBUFromServerID",        serverid                   );
-    message.setStringProperty( "LBUFromServerStartTime", Long.toString( starttime ) );
-    message.setStringProperty( "LBUPluginID",            pluginid                   );
-    message.setStringProperty( "LBUType",                "coordination"             );
-    message.setStringProperty( "LBUSubType",             command                    );
-    message.setText( "" );
+    Properties p = new Properties();
+    p.setProperty( "LBUToServerID",          to                         );
+    p.setProperty( "LBUFromServerID",        serverid                   );
+    p.setProperty( "LBUFromServerStartTime", Long.toString( starttime ) );
+    p.setProperty( "LBUPluginID",            pluginid                   );
+    p.setProperty( "LBUType",                "coordination"             );
+    p.setProperty( "LBUSubType",             command                    );
     
-    logger.debug( "Sending message via BB connection pool." );
-    try {
-      topicsubscriber.sendMessage( message );
-    } catch (MessageQueueException ex) {
-      logger.error( "Unable to send message via BB connection pool. ", ex );
-    }
-    
-    logger.debug( "Sending coordination message the old way." );
-    destination.send( message );
+    logger.debug( "-----> " + serverid + " sending coordination " + command + " to " + to );
+    try { sendMessage( "", p ); } catch (MessageQueueException ex) { logger.error( "Unable to send message via BB connection pool. ", ex ); }
   }
   
   void sendStartingMessage() throws JMSException
@@ -341,22 +347,36 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
   }
 
   @Override
-  public void onMessage(Message msg)
+  public void onMessage( Message message )
   {
-    logger.debug( "Received message via BB connection pool. " + msg.toString() );
     try
     {
-      Enumeration e = msg.getPropertyNames();
-      while ( e.hasMoreElements() )
+      String to = message.getStringProperty( "LBUToServerID" );
+      if ( to == null || ( !"*".equals(to) && !serverid.equals(to) ) )
+        return;
+      String type = message.getStringProperty( "LBUType" );
+      if ( "coordination".equals( type ) )
+        consumeCoordinationMessage( message );
+      else if ( listener != null )
       {
-        String name = (String) e.nextElement();
-        logger.debug( "Propery Name: " + name + " = " + msg.getStringProperty( name ) );
+        logger.debug( "<----- " + serverid + " received user message from " + message.getStringProperty( "LBUFromServerID" ) );
+        listener.consumeMessage( message );
       }
     }
     catch (JMSException ex)
     {
-      logger.error( "Ignoring exception while listing message properties.", ex );
+      logger.error( "Exception while processing incoming message.", ex );
     }
+  }
+
+    
+  ActiveMQConnectionPool getConnectionPool() {
+    if (BbServiceManager.isServiceInitialized(MessageQueueService.class.getName())) {
+      ActiveMQMessageQueueService activeMQMessageQueueService
+              = (ActiveMQMessageQueueService) BbServiceManager.safeLookupService(MessageQueueService.class);
+      return activeMQMessageQueueService.getConnectionPool();
+    }
+    return null;
   }
 
   
@@ -367,27 +387,10 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
     {
       try { Thread.sleep( 1000 ); }
       catch (InterruptedException ex) {}
-      logger.debug( "Starting building block coordinator." );
-      
       try
-      {
-        topicsubscriber.register();
-        
-        destinationmanager = new DestinationManager( logger );
-        destination = destinationmanager.createPeerDestination( 
-                pluginid, 
-                serverid, 
-                BuildingBlockCoordinator.this );
-        destinationmanager.start();    
-        started = true;
-        starttime = System.currentTimeMillis();
-        logger.debug( "Destination manager started." );
-        
+      {        
         sendStartingMessage();
-        logger.debug( "Sent 'starting'." );
         sendDiscoverMessage();
-        logger.debug( "Sent 'discover'." );
-        logger.debug( "Building block coordinator started." );
       }
       catch (JMSException ex)
       {
@@ -440,8 +443,16 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
   
   synchronized String getOldestPeerName()
   {
+    thinPeers();
     if ( this.peersbyage.isEmpty() ) return null;
     return this.peersbyage.get( 0 ).name;
+  }
+  
+  synchronized String getNewestPeerName()
+  {
+    thinPeers();
+    if ( this.peersbyage.isEmpty() ) return null;
+    return this.peersbyage.get( this.peersbyage.size() - 1 ).name;
   }
   
   synchronized PeerRecord getPeer( String name )
@@ -474,15 +485,50 @@ public class BuildingBlockCoordinator implements PeerDestinationListener, BBMess
     });
   }
   
+  synchronized void touchPeer( String name )
+  {
+    if ( !hasPeer( name ) )
+      return;
+    knownpeers.get( name ).lastcontacttime = System.currentTimeMillis();
+  }
+  
+  synchronized void thinPeers()
+  {
+    long now = System.currentTimeMillis();
+    boolean updated = false;
+    for ( PeerRecord record : getPeerRecordList() )
+    {
+      long age = now - record.lastcontacttime;
+      if ( age > PEER_TIMEOUT )
+      {
+        removePeer( record.name );
+        updated = true;
+      }
+    }
+    if ( updated )
+      logPeers();
+  }
+  
+  void logPeers()
+  {
+    logger.info( "-----------------------" );
+    logger.info( "Peer list." );
+    long now = System.currentTimeMillis();
+    for ( PeerRecord r : this.getPeerRecordList() )
+      logger.info( r.name + " Started " + ((now - r.starttime)/1000L) + "s ago. Last heard from " + (now - r.lastcontacttime) + "ms ago." );
+    logger.info( "-----------------------" );    
+  }
+  
   class PeerRecord
   {
     String name;
     long starttime;
+    long lastcontacttime;
 
     public PeerRecord( String name, long starttime )
     {
       this.name = name;
-      this.starttime = starttime;
+      lastcontacttime = this.starttime = starttime;
     }
     
   }
